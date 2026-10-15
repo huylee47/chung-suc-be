@@ -95,7 +95,7 @@ app.get('/api/topups', { onRequest: [app.authenticate] }, async (request) => {
 
 app.post('/api/topups', { onRequest: [app.authenticate] }, async (request, reply) => {
   const user = currentUser(request)!;
-  const body = z.object({ amount: z.number().int().min(1000) }).parse(request.body);
+  const body = z.object({ amount: z.number().int().min(20000, 'Số tiền nạp tối thiểu là 20.000 Xu') }).parse(request.body);
   const topup = { id: createId('top'), userId: user.id, amount: money(body.amount), transferContent: createTransferContent(), status: 'PENDING' as const, createdAt: new Date().toISOString() };
   topups.push(topup);
   return reply.code(201).send({ data: { ...topup, bankAccount: process.env.SEPAY_ACCOUNT_NUMBER ?? '', bankCode: process.env.SEPAY_BANK_CODE ?? '', qrUrl: createPaymentQrUrl(topup.amount, topup.transferContent) } });
