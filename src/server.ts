@@ -15,7 +15,8 @@ declare module 'fastify' {
 }
 
 const app = Fastify({ logger: true });
-await app.register(cors, { origin: process.env.CORS_ORIGIN?.split(',') ?? true });
+const corsOrigins = process.env.CORS_ORIGIN?.split(',').map((origin) => origin.trim()).filter(Boolean);
+await app.register(cors, { origin: corsOrigins?.length ? corsOrigins : true });
 await app.register(sensible);
 await app.register(jwt, { secret: process.env.JWT_ACCESS_SECRET ?? 'development-secret' });
 seedAdmin(await argon2.hash(process.env.ADMIN_PASSWORD ?? 'change-me'));
