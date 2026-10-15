@@ -82,7 +82,9 @@ Endpoint webhook hiện tại:
 ```text
 POST /api/webhooks/sepay
 Header: x-sepay-secret: <SEPAY_WEBHOOK_SECRET>
-Body tối thiểu: { "amount": 100000, "content": "CSLQ ...", "referenceCode": "..." }
+Body SePay: `{ "transferAmount": 50000, "content": "... NAP123456U7", "referenceCode": "FT...", "id": 90255437 }`
+
+URL webhook trên Render bắt buộc dùng `https://`, không dùng `http://`; nếu dùng HTTP Render trả redirect `307` và một số webhook sender sẽ báo body rỗng.
 ```
 
 Khi cắm SePay thật cần kiểm tra lại field payload theo tài khoản SePay đang dùng và cấu hình URL public HTTPS, ví dụ:

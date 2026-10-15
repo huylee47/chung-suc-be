@@ -1,4 +1,5 @@
 import Fastify from 'fastify';
+import type { FastifyError } from 'fastify';
 import argon2 from 'argon2';
 import cors from '@fastify/cors';
 import jwt from '@fastify/jwt';
@@ -19,6 +20,20 @@ const corsOrigins = process.env.CORS_ORIGIN?.split(',').map((origin) => origin.t
 await app.register(cors, { origin: corsOrigins?.length ? corsOrigins : true });
 await app.register(sensible);
 await app.register(jwt, { secret: process.env.JWT_ACCESS_SECRET ?? 'development-secret' });
+app.setErrorHandler((error: FastifyError, request, reply) => {
+  request.log.error({ err: error }, 'Request failed');
+  const statusCode = error.statusCode && error.statusCode >= 400 ? error.statusCode : 500;
+  const zodError = error instanceof z.ZodError;
+  const details = zodError ? error.issues : (error as any).validation;
+  return reply.status(statusCode).send({
+    statusCode,
+    error: zodError ? 'ValidationError' : error.name || 'RequestError',
+    message: zodError ? 'Dữ liệu gửi lên không hợp lệ' : error.message || 'Có lỗi xảy ra trên máy chủ',
+    details: details ?? undefined,
+    path: request.url,
+    requestId: request.id
+  });
+});
 seedAdmin(await argon2.hash(process.env.ADMIN_PASSWORD ?? 'change-me'));
 seedDemoUser(await argon2.hash('demo123456'));
 
@@ -122,13 +137,24 @@ app.get('/api/orders', { onRequest: [app.authenticate] }, async (request) => {
 app.post('/api/webhooks/sepay', async (request, reply) => {
   const expected = process.env.SEPAY_WEBHOOK_SECRET;
   if (expected && request.headers['x-sepay-secret'] !== expected) throw reply.unauthorized('Invalid webhook secret');
-  const body = z.object({ id: z.string().optional(), amount: z.number().positive(), content: z.string(), referenceCode: z.string().optional() }).parse(request.body);
-  const matching = topups.find((topup) => topup.status === 'PENDING' && body.content.toUpperCase().includes(topup.transferContent.toUpperCase()));
+  const body = z.object({
+    id: z.union([z.string(), z.number()]).optional(),
+    amount: z.coerce.number().positive().optional(),
+    transferAmount: z.coerce.number().positive().optional(),
+    content: z.string().optional(),
+    description: z.string().optional(),
+    code: z.string().optional(),
+    referenceCode: z.string().optional()
+  }).parse(request.body);
+  const receivedAmount = body.transferAmount ?? body.amount;
+  const receivedContent = body.content ?? body.description ?? body.code ?? '';
+  if (!receivedAmount || !receivedContent) return reply.badRequest('Missing transfer amount or content');
+  const matching = topups.find((topup) => topup.status === 'PENDING' && receivedContent.toUpperCase().includes(topup.transferContent.toUpperCase()));
   if (!matching) return { ok: true, matched: false };
   matching.status = 'PAID';
-  matching.providerReference = body.referenceCode ?? body.id;
+  matching.providerReference = body.referenceCode ?? (body.id === undefined ? undefined : String(body.id));
   const user = findUser(matching.userId);
-  if (user && body.amount >= matching.amount) user.balance += matching.amount;
+  if (user && receivedAmount >= matching.amount) user.balance += matching.amount;
   return { ok: true, matched: true, topupId: matching.id };
 });
 
