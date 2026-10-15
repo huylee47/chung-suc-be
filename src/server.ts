@@ -23,6 +23,22 @@ seedDemoUser(await argon2.hash('demo123456'));
 
 const money = (value: number) => Math.round(value);
 const createTransferContent = () => `NAP${Array.from({ length: 6 }, () => randomInt(0, 10)).join('')}U${randomInt(0, 10)}`;
+const createPaymentQrUrl = (amount: number, transferContent: string) => {
+  const accountNumber = process.env.SEPAY_ACCOUNT_NUMBER;
+  const bankCode = process.env.SEPAY_BANK_CODE;
+  if (!accountNumber || !bankCode) return undefined;
+  const url = new URL('https://vietqr.app/img');
+  url.searchParams.set('acc', accountNumber);
+  url.searchParams.set('bank', bankCode);
+  url.searchParams.set('amount', String(amount));
+  url.searchParams.set('des', transferContent);
+  url.searchParams.set('template', 'compact');
+  url.searchParams.set('showinfo', 'true');
+  url.searchParams.set('fullacc', 'true');
+  if (process.env.SEPAY_ACCOUNT_NAME) url.searchParams.set('holder', process.env.SEPAY_ACCOUNT_NAME);
+  url.searchParams.set('store', 'CHUNGSUCLIQI');
+  return url.toString();
+};
 const publicUser = (user: User) => { const { passwordHash: _passwordHash, ...safeUser } = user; return safeUser; };
 const findUser = (id: string) => users.find((user) => user.id === id);
 
@@ -81,7 +97,7 @@ app.post('/api/topups', { onRequest: [app.authenticate] }, async (request, reply
   const body = z.object({ amount: z.number().int().min(1000) }).parse(request.body);
   const topup = { id: createId('top'), userId: user.id, amount: money(body.amount), transferContent: createTransferContent(), status: 'PENDING' as const, createdAt: new Date().toISOString() };
   topups.push(topup);
-  return reply.code(201).send({ data: { ...topup, bankAccount: process.env.SEPAY_ACCOUNT_NUMBER ?? '', bankCode: process.env.SEPAY_BANK_CODE ?? '' } });
+  return reply.code(201).send({ data: { ...topup, bankAccount: process.env.SEPAY_ACCOUNT_NUMBER ?? '', bankCode: process.env.SEPAY_BANK_CODE ?? '', qrUrl: createPaymentQrUrl(topup.amount, topup.transferContent) } });
 });
 
 app.post('/api/orders', { onRequest: [app.authenticate] }, async (request, reply) => {

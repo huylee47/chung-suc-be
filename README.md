@@ -63,16 +63,19 @@ SEPAY_API_KEY=<api-key-neu-can-goi-api-sepay>
 SEPAY_WEBHOOK_SECRET=<secret-doi-chieu-webhook>
 SEPAY_ACCOUNT_NUMBER=<so-tai-khoan-nhan-tien>
 SEPAY_BANK_CODE=<ma-ngan-hang>
+SEPAY_ACCOUNT_NAME=<ten-chu-tai-khoan-khong-dau>
 ```
 
 Flow dự kiến:
 
 1. User tạo lệnh tại `POST /api/topups`.
-2. Backend sinh `transferContent` duy nhất theo mẫu `NAPXXXXXXUX`, ví dụ `NAP482913U7` (`X` là chữ số).
+2. Backend sinh `transferContent` duy nhất theo mẫu `NAPXXXXXXUX`, ví dụ `NAP482913U7` (`X` là chữ số), đồng thời trả `qrUrl` VietQR động theo số tiền và nội dung.
 3. User chuyển khoản đúng số tiền và nội dung.
 4. SePay gọi `POST /api/webhooks/sepay`.
 5. Backend tìm topup `PENDING`, kiểm tra nội dung + số tiền, lưu `providerReference`, chuyển sang `PAID` và ghi một dòng `wallet_ledger`.
 6. Nếu webhook gửi lại, không được cộng số dư lần hai.
+
+QR được sinh từ `SEPAY_ACCOUNT_NUMBER`, `SEPAY_BANK_CODE`, số tiền và `transferContent`; nếu thiếu thông tin tài khoản/ngân hàng thì API không trả `qrUrl`, để local demo không hiển thị ảnh QR hỏng.
 
 Endpoint webhook hiện tại:
 
