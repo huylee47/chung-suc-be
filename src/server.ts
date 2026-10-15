@@ -4,6 +4,7 @@ import cors from '@fastify/cors';
 import jwt from '@fastify/jwt';
 import sensible from '@fastify/sensible';
 import { z } from 'zod';
+import { randomInt } from 'node:crypto';
 import { createId, orders, products, seedAdmin, seedDemoUser, topups, users } from './store.js';
 import type { OrderStatus, User } from './types.js';
 
@@ -21,6 +22,7 @@ seedAdmin(await argon2.hash(process.env.ADMIN_PASSWORD ?? 'change-me'));
 seedDemoUser(await argon2.hash('demo123456'));
 
 const money = (value: number) => Math.round(value);
+const createTransferContent = () => `NAP${Array.from({ length: 6 }, () => randomInt(0, 10)).join('')}U${randomInt(0, 10)}`;
 const publicUser = (user: User) => { const { passwordHash: _passwordHash, ...safeUser } = user; return safeUser; };
 const findUser = (id: string) => users.find((user) => user.id === id);
 
@@ -77,9 +79,9 @@ app.get('/api/topups', { onRequest: [app.authenticate] }, async (request) => {
 app.post('/api/topups', { onRequest: [app.authenticate] }, async (request, reply) => {
   const user = currentUser(request)!;
   const body = z.object({ amount: z.number().int().min(1000) }).parse(request.body);
-  const topup = { id: createId('top'), userId: user.id, amount: money(body.amount), transferContent: `CSLQ ${user.id.toUpperCase()} ${Date.now()}`, status: 'PENDING' as const, createdAt: new Date().toISOString() };
+  const topup = { id: createId('top'), userId: user.id, amount: money(body.amount), transferContent: createTransferContent(), status: 'PENDING' as const, createdAt: new Date().toISOString() };
   topups.push(topup);
-  return reply.code(201).send({ data: topup });
+  return reply.code(201).send({ data: { ...topup, bankAccount: process.env.SEPAY_ACCOUNT_NUMBER ?? '', bankCode: process.env.SEPAY_BANK_CODE ?? '' } });
 });
 
 app.post('/api/orders', { onRequest: [app.authenticate] }, async (request, reply) => {

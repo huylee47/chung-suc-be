@@ -68,7 +68,7 @@ SEPAY_BANK_CODE=<ma-ngan-hang>
 Flow dự kiến:
 
 1. User tạo lệnh tại `POST /api/topups`.
-2. Backend sinh `transferContent` duy nhất, ví dụ `CSLQ <USER_ID> <TIMESTAMP>`.
+2. Backend sinh `transferContent` duy nhất theo mẫu `NAPXXXXXXUX`, ví dụ `NAP482913U7` (`X` là chữ số).
 3. User chuyển khoản đúng số tiền và nội dung.
 4. SePay gọi `POST /api/webhooks/sepay`.
 5. Backend tìm topup `PENDING`, kiểm tra nội dung + số tiền, lưu `providerReference`, chuyển sang `PAID` và ghi một dòng `wallet_ledger`.
