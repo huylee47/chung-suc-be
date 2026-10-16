@@ -135,8 +135,15 @@ app.get('/api/orders', { onRequest: [app.authenticate] }, async (request) => {
 });
 
 app.post('/api/webhooks/sepay', async (request, reply) => {
-  const expected = process.env.SEPAY_WEBHOOK_SECRET;
-  if (expected && request.headers['x-sepay-secret'] !== expected) throw reply.unauthorized('Invalid webhook secret');
+  const expectedSecret = process.env.SEPAY_WEBHOOK_SECRET;
+  const expectedApiKey = process.env.SEPAY_API_KEY;
+  const providedSecret = request.headers['x-sepay-secret'] ?? request.headers['x-secret-key'];
+  const authorization = request.headers.authorization;
+  const secretValid = Boolean(expectedSecret && providedSecret === expectedSecret);
+  const apiKeyValid = Boolean(expectedApiKey && authorization === `Apikey ${expectedApiKey}`);
+  if ((expectedSecret || expectedApiKey) && !secretValid && !apiKeyValid) {
+    throw reply.unauthorized('Invalid webhook credentials. Use SePay API Key (Authorization: Apikey ...) or Secret Key matching the backend environment.');
+  }
   const body = z.object({
     id: z.union([z.string(), z.number()]).optional(),
     amount: z.coerce.number().positive().optional(),
@@ -150,12 +157,12 @@ app.post('/api/webhooks/sepay', async (request, reply) => {
   const receivedContent = body.content ?? body.description ?? body.code ?? '';
   if (!receivedAmount || !receivedContent) return reply.badRequest('Missing transfer amount or content');
   const matching = topups.find((topup) => topup.status === 'PENDING' && receivedContent.toUpperCase().includes(topup.transferContent.toUpperCase()));
-  if (!matching) return { ok: true, matched: false };
+  if (!matching) return { success: true, ok: true, matched: false };
   matching.status = 'PAID';
   matching.providerReference = body.referenceCode ?? (body.id === undefined ? undefined : String(body.id));
   const user = findUser(matching.userId);
   if (user && receivedAmount >= matching.amount) user.balance += matching.amount;
-  return { ok: true, matched: true, topupId: matching.id };
+  return { success: true, ok: true, matched: true, topupId: matching.id };
 });
 
 app.get('/api/admin/dashboard', { onRequest: [app.authenticate] }, async (request, reply) => {
