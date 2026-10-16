@@ -36,7 +36,7 @@ const asUser = (row: DbRow): User => ({ id: text(row, 'id')!, username: text(row
 const asProduct = (row: DbRow): Product => ({ id: text(row, 'id')!, name: text(row, 'name')!, description: text(row, 'description')!, price: numeric(row, 'price'), resellerPrice: row.reseller_price == null ? undefined : numeric(row, 'reseller_price'), available: numeric(row, 'available') === 1, stock: row.stock == null ? undefined : numeric(row, 'stock') });
 const asOrder = (row: DbRow): Order => ({ id: text(row, 'id')!, userId: text(row, 'user_id')!, username: text(row, 'username') ?? '', productId: text(row, 'product_id')!, productName: text(row, 'product_name') ?? '', uid: text(row, 'uid')!, quantity: numeric(row, 'quantity'), total: numeric(row, 'total'), status: text(row, 'status') as OrderStatus, note: text(row, 'note'), createdAt: text(row, 'created_at')! });
 const asTopup = (row: DbRow): Topup => ({ id: text(row, 'id')!, userId: text(row, 'user_id')!, amount: numeric(row, 'amount'), transferContent: text(row, 'transfer_content')!, status: text(row, 'status') as Topup['status'], providerReference: text(row, 'provider_reference'), createdAt: text(row, 'created_at')! });
-const publicUser = (user: User) => { const { passwordHash: _passwordHash, ...safe } = user; return safe; };
+const publicUser = (user: User) => { const { passwordHash: _passwordHash, email: _email, ...safe } = user; return safe; };
 const transferContent = () => 'NAP' + Array.from({ length: 6 }, () => randomInt(0, 10)).join('') + 'U' + randomInt(0, 10);
 const qrUrl = (amount: number, content: string) => {
   if (!process.env.SEPAY_ACCOUNT_NUMBER || !process.env.SEPAY_BANK_CODE) return undefined;
@@ -78,15 +78,17 @@ const orderSelect = 'SELECT o.*, u.username, p.name AS product_name FROM orders 
 app.get('/health', async () => ({ ok: true, service: 'chungsucliqi-be' }));
 app.get('/api/products', async () => ({ data: (await query('SELECT * FROM products WHERE available = 1 ORDER BY created_at DESC')).map(asProduct) }));
 app.post('/api/auth/register', async (request, reply) => {
-  const body = z.object({ username: z.string().min(2), email: z.string().email(), phone: z.string().optional(), password: z.string().min(6) }).parse(request.body);
-  if (await first('SELECT id FROM users WHERE email = ?', [body.email])) throw reply.conflict('Email đã được sử dụng');
-  const user: User = { id: createId('usr'), username: body.username, email: body.email, phone: body.phone, passwordHash: await argon2.hash(body.password), role: 'USER', balance: 0, status: 'ACTIVE', createdAt: new Date().toISOString() };
+  const body = z.object({ username: z.string().trim().min(2).max(40), password: z.string().min(6) }).parse(request.body);
+  if (await first('SELECT id FROM users WHERE lower(username) = lower(?)', [body.username])) throw reply.conflict('Tên đăng nhập đã được sử dụng');
+  const id = createId('usr');
+  const user: User = { id, username: body.username, email: id + '@users.chungsucliqi.local', passwordHash: await argon2.hash(body.password), role: 'USER', balance: 0, status: 'ACTIVE', createdAt: new Date().toISOString() };
   await execute('INSERT INTO users (id, username, email, phone, password_hash, role, balance, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', [user.id, user.username, user.email, user.phone ?? null, user.passwordHash!, user.role, 0, user.status, user.createdAt]);
   return reply.code(201).send({ data: { user: publicUser(user), token: app.jwt.sign({ sub: user.id, role: user.role }) } });
 });
 app.post('/api/auth/login', async (request, reply) => {
-  const body = z.object({ email: z.string().email(), password: z.string().min(1) }).parse(request.body);
-  const row = await first('SELECT * FROM users WHERE email = ?', [body.email]);
+  const body = z.object({ username: z.string().trim().min(2).optional(), email: z.string().email().optional(), password: z.string().min(1) }).refine((data) => Boolean(data.username || data.email), { message: 'Nhập tên đăng nhập hoặc email' }).parse(request.body);
+  const identifier = body.username ?? body.email!;
+  const row = await first('SELECT * FROM users WHERE lower(username) = lower(?) OR lower(email) = lower(?) LIMIT 1', [identifier, identifier]);
   const user = row && asUser(row);
   if (!user || user.status === 'LOCKED' || !user.passwordHash || !(await argon2.verify(user.passwordHash, body.password))) throw reply.unauthorized('Thông tin đăng nhập không hợp lệ');
   return { data: { user: publicUser(user), token: app.jwt.sign({ sub: user.id, role: user.role }) } };
