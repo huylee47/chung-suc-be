@@ -15,9 +15,9 @@ Demo accounts sau khi khởi động API:
 - User: `demo@example.com` / `demo123456`
 - Admin: lấy theo `ADMIN_EMAIL` / `ADMIN_PASSWORD` trong `.env`
 
-## Checklist cấu hình Turso trước khi go-live
+## Cấu hình Turso
 
-Hiện tại route đang dùng store in-memory để demo nhanh. `src/db.ts` đã có client libSQL, còn `src/schema.sql` là schema Turso cần apply trước khi chuyển route sang persistence thật.
+API đang ghi trực tiếp vào Turso/libSQL. Khi backend khởi động, các bảng và index cần thiết sẽ được tạo tự động nếu chưa tồn tại; dữ liệu tài khoản, ví, đơn hàng, lệnh nạp và sản phẩm không còn nằm trong memory.
 
 1. Cài Turso CLI và đăng nhập tài khoản Turso.
 2. Tạo database:
@@ -28,7 +28,7 @@ turso db show chungsucliqi --url
 turso db tokens create chungsucliqi
 ```
 
-3. Apply schema:
+3. Có thể apply schema thủ công khi muốn kiểm tra database (không bắt buộc vì API tự khởi tạo bảng):
 
 ```powershell
 turso db shell chungsucliqi < src/schema.sql
@@ -41,7 +41,7 @@ DATABASE_URL=libsql://<database>-<organization>.turso.io
 DATABASE_AUTH_TOKEN=<token-tu-turso>
 ```
 
-5. Trước khi bật production cần chuyển `src/store.ts` sang repository dùng Turso/Drizzle. Không xoá store demo cho đến khi đã test migration, login, số dư, tạo đơn và webhook.
+5. Redeploy backend sau khi thêm hai biến này. Các tài khoản tạo mới sau đó sẽ xuất hiện ngay trong trang admin và vẫn còn sau khi Render restart.
 
 Các bảng chính trong schema:
 
