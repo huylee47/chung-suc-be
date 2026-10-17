@@ -1,4 +1,4 @@
-# chungsucliqi-be
+# binaov-be
 
 Fastify API cho đăng nhập, ví Xu, nạp tiền SePay, đơn UID và trang quản trị.
 
@@ -23,15 +23,15 @@ API đang ghi trực tiếp vào Turso/libSQL. Khi backend khởi động, các 
 2. Tạo database:
 
 ```powershell
-turso db create chungsucliqi
-turso db show chungsucliqi --url
-turso db tokens create chungsucliqi
+turso db create binaov
+turso db show binaov --url
+turso db tokens create binaov
 ```
 
 3. Có thể apply schema thủ công khi muốn kiểm tra database (không bắt buộc vì API tự khởi tạo bảng):
 
 ```powershell
-turso db shell chungsucliqi < src/schema.sql
+turso db shell binaov < src/schema.sql
 ```
 
 4. Điền vào `.env`:
@@ -106,13 +106,13 @@ corepack enable
 corepack prepare pnpm@latest --activate
 pnpm add -g pm2
 
-git clone <repo-be> /var/www/chungsucliqi-be
-cd /var/www/chungsucliqi-be
+git clone <repo-be> /var/www/binaov-be
+cd /var/www/binaov-be
 pnpm i --frozen-lockfile
 cp .env.example .env
 # chỉnh DATABASE_URL, DATABASE_AUTH_TOKEN, JWT_*, SEPAY_*, CORS_ORIGIN
 pnpm build
-pm2 start dist/server.js --name chungsucliqi-be
+pm2 start dist/server.js --name binaov-be
 pm2 save
 pm2 startup
 ```

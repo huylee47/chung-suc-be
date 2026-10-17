@@ -75,13 +75,13 @@ async function admin(request: any, reply: any) {
 }
 const orderSelect = 'SELECT o.*, u.username, p.name AS product_name FROM orders o JOIN users u ON u.id = o.user_id JOIN products p ON p.id = o.product_id';
 
-app.get('/health', async () => ({ ok: true, service: 'chungsucliqi-be' }));
+app.get('/health', async () => ({ ok: true, service: 'binaov-be' }));
 app.get('/api/products', async () => ({ data: (await query('SELECT * FROM products WHERE available = 1 ORDER BY created_at DESC')).map(asProduct) }));
 app.post('/api/auth/register', async (request, reply) => {
   const body = z.object({ username: z.string().trim().min(2).max(40), password: z.string().min(6) }).parse(request.body);
   if (await first('SELECT id FROM users WHERE lower(username) = lower(?)', [body.username])) throw reply.conflict('Tên đăng nhập đã được sử dụng');
   const id = createId('usr');
-  const user: User = { id, username: body.username, email: id + '@users.chungsucliqi.local', passwordHash: await argon2.hash(body.password), role: 'USER', balance: 0, status: 'ACTIVE', createdAt: new Date().toISOString() };
+  const user: User = { id, username: body.username, email: id + '@users.binaov.shop', passwordHash: await argon2.hash(body.password), role: 'USER', balance: 0, status: 'ACTIVE', createdAt: new Date().toISOString() };
   await execute('INSERT INTO users (id, username, email, phone, password_hash, role, balance, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', [user.id, user.username, user.email, user.phone ?? null, user.passwordHash!, user.role, 0, user.status, user.createdAt]);
   return reply.code(201).send({ data: { user: publicUser(user), token: app.jwt.sign({ sub: user.id, role: user.role }) } });
 });
