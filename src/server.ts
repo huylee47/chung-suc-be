@@ -81,18 +81,6 @@ async function seedDatabase() {
   for (const v of defaultVouchers) {
     await execute('INSERT OR IGNORE INTO vouchers (id, code, description, discount_type, discount_value, min_order_value, max_discount, usage_limit, used_count, expires_at, active, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', v as SqlArg[]);
   }
-
-  // Seed topup samples if leaderboard is empty
-  const paidCount = await first('SELECT COUNT(*) AS c FROM topup_transactions WHERE status = ?', ['PAID']);
-  if (!numeric(paidCount!, 'c')) {
-    const demoTops = [
-      ['demo_top_1', 'demo-user', 500000, 'NAP500001U1', 'PAID', 'REF500001', now, now],
-      ['demo_top_2', 'demo-user', 250000, 'NAP250002U2', 'PAID', 'REF250002', now, now]
-    ];
-    for (const t of demoTops) {
-      await execute('INSERT OR IGNORE INTO topup_transactions (id, user_id, amount, transfer_content, status, provider_reference, created_at, paid_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', t as SqlArg[]);
-    }
-  }
 }
 await ensureDatabase();
 await seedDatabase();
