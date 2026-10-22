@@ -67,9 +67,16 @@ const qrUrl = (amount: number, content: string) => {
 
 async function seedDatabase() {
   const now = new Date().toISOString();
+  // Xóa sạch mọi dữ liệu demo/mẫu cũ
+  try {
+    await execute("DELETE FROM topup_transactions WHERE user_id = 'demo-user' OR id LIKE 'demo_%'");
+    await execute("DELETE FROM orders WHERE user_id = 'demo-user' OR id LIKE 'ord_demo_%'");
+    await execute("DELETE FROM wallet_ledger WHERE user_id = 'demo-user' OR id LIKE 'led_demo_%'");
+    await execute("DELETE FROM users WHERE id = 'demo-user' OR lower(username) LIKE '%demo%' OR email = 'demo@example.com'");
+  } catch (_) {}
+
   const adminEmail = process.env.ADMIN_EMAIL ?? 'admin@example.com';
   if (!await first('SELECT id FROM users WHERE email = ?', [adminEmail])) await execute('INSERT INTO users (id, username, email, password_hash, role, balance, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', ['admin-demo', 'Admin', adminEmail, await argon2.hash(process.env.ADMIN_PASSWORD ?? 'change-me'), 'ADMIN', 0, 'ACTIVE', now]);
-  if (!await first('SELECT id FROM users WHERE id = ?', ['demo-user'])) await execute('INSERT INTO users (id, username, email, phone, password_hash, role, balance, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', ['demo-user', 'Demo User', 'demo@example.com', '0995438093', await argon2.hash('demo123456'), 'USER', 245000, 'ACTIVE', now]);
   const products = [['chung-suc-1', 'Chung sức 1 rương', '1 rương SS, nhập mã sự kiện.', 30000, 25000, 1, 99], ['chung-suc-2', 'Chung sức 2 rương', '2 rương SS + S+, nhập mã sự kiện.', 45000, 35000, 1, 99], ['chung-suc-full', 'Chung sức full 3 rương', 'Full 3 rương Chung Sức.', 60000, 50000, 1, 99], ['acc-clone', 'Acc clone level 12', 'Acc clone bao full khi còn hàng.', 1000, 800, 1, 12]];
   for (const product of products) await execute('INSERT OR IGNORE INTO products (id, name, description, price, reseller_price, available, stock, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', [...product, now] as SqlArg[]);
 
@@ -108,7 +115,7 @@ app.get('/api/leaderboard', async () => {
            COUNT(t.id) AS topup_count
     FROM users u
     JOIN topup_transactions t ON t.user_id = u.id AND t.status = 'PAID'
-    WHERE u.role = 'USER'
+    WHERE u.role = 'USER' AND u.id != 'demo-user' AND lower(u.username) NOT LIKE '%demo%'
     GROUP BY u.id, u.username
     ORDER BY total_deposited DESC
     LIMIT 20
