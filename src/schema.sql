@@ -54,6 +54,21 @@ CREATE TABLE IF NOT EXISTS wallet_ledger (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS vouchers (
+  id TEXT PRIMARY KEY,
+  code TEXT NOT NULL UNIQUE,
+  description TEXT NOT NULL,
+  discount_type TEXT NOT NULL,
+  discount_value INTEGER NOT NULL,
+  min_order_value INTEGER NOT NULL DEFAULT 0,
+  max_discount INTEGER,
+  usage_limit INTEGER,
+  used_count INTEGER NOT NULL DEFAULT 0,
+  expires_at TEXT,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS order_status_history (
   id TEXT PRIMARY KEY,
   order_id TEXT NOT NULL REFERENCES orders(id),

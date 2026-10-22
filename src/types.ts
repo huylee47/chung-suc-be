@@ -24,6 +24,31 @@ export interface Product {
   stock?: number;
 }
 
+export type DiscountType = 'PERCENT' | 'FIXED';
+
+export interface Voucher {
+  id: string;
+  code: string;
+  description: string;
+  discountType: DiscountType;
+  discountValue: number;
+  minOrderValue: number;
+  maxDiscount?: number;
+  usageLimit?: number;
+  usedCount: number;
+  expiresAt?: string;
+  active: boolean;
+  createdAt: string;
+}
+
+export interface LeaderboardEntry {
+  rank: number;
+  userId: string;
+  username: string;
+  totalDeposited: number;
+  topupCount: number;
+}
+
 export interface Order {
   id: string;
   userId: string;
@@ -33,6 +58,9 @@ export interface Order {
   uid: string;
   quantity: number;
   total: number;
+  originalTotal?: number;
+  discount?: number;
+  voucherCode?: string;
   status: OrderStatus;
   note?: string;
   createdAt: string;

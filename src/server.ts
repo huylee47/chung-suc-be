@@ -7,7 +7,7 @@ import sensible from '@fastify/sensible';
 import { z } from 'zod';
 import { randomInt, randomUUID } from 'node:crypto';
 import { ensureDatabase, turso } from './db.js';
-import type { Order, OrderStatus, Product, Topup, User } from './types.js';
+import type { DiscountType, LeaderboardEntry, Order, OrderStatus, Product, Topup, User, Voucher } from './types.js';
 
 declare module 'fastify' { interface FastifyInstance { authenticate: (request: any) => Promise<void>; } }
 type DbRow = Record<string, unknown>;
@@ -34,7 +34,21 @@ const numeric = (row: DbRow, key: string) => Number(row[key] ?? 0);
 
 const asUser = (row: DbRow): User => ({ id: text(row, 'id')!, username: text(row, 'username')!, email: text(row, 'email')!, phone: text(row, 'phone'), passwordHash: text(row, 'password_hash'), role: text(row, 'role') === 'ADMIN' ? 'ADMIN' : 'USER', balance: numeric(row, 'balance'), status: text(row, 'status') === 'LOCKED' ? 'LOCKED' : 'ACTIVE', createdAt: text(row, 'created_at')! });
 const asProduct = (row: DbRow): Product => ({ id: text(row, 'id')!, name: text(row, 'name')!, description: text(row, 'description')!, price: numeric(row, 'price'), resellerPrice: row.reseller_price == null ? undefined : numeric(row, 'reseller_price'), available: numeric(row, 'available') === 1, stock: row.stock == null ? undefined : numeric(row, 'stock') });
-const asOrder = (row: DbRow): Order => ({ id: text(row, 'id')!, userId: text(row, 'user_id')!, username: text(row, 'username') ?? '', productId: text(row, 'product_id')!, productName: text(row, 'product_name') ?? '', uid: text(row, 'uid')!, quantity: numeric(row, 'quantity'), total: numeric(row, 'total'), status: text(row, 'status') as OrderStatus, note: text(row, 'note'), createdAt: text(row, 'created_at')! });
+const asVoucher = (row: DbRow): Voucher => ({
+  id: text(row, 'id')!,
+  code: text(row, 'code')!,
+  description: text(row, 'description')!,
+  discountType: text(row, 'discount_type') as DiscountType,
+  discountValue: numeric(row, 'discount_value'),
+  minOrderValue: numeric(row, 'min_order_value'),
+  maxDiscount: row.max_discount == null ? undefined : numeric(row, 'max_discount'),
+  usageLimit: row.usage_limit == null ? undefined : numeric(row, 'usage_limit'),
+  usedCount: numeric(row, 'used_count'),
+  expiresAt: text(row, 'expires_at'),
+  active: numeric(row, 'active') === 1,
+  createdAt: text(row, 'created_at')!
+});
+const asOrder = (row: DbRow): Order => ({ id: text(row, 'id')!, userId: text(row, 'user_id')!, username: text(row, 'username') ?? '', productId: text(row, 'product_id')!, productName: text(row, 'product_name') ?? '', uid: text(row, 'uid')!, quantity: numeric(row, 'quantity'), total: numeric(row, 'total'), originalTotal: row.original_total == null ? undefined : numeric(row, 'original_total'), discount: row.discount == null ? undefined : numeric(row, 'discount'), voucherCode: text(row, 'voucher_code'), status: text(row, 'status') as OrderStatus, note: text(row, 'note'), createdAt: text(row, 'created_at')! });
 const asTopup = (row: DbRow): Topup => ({ id: text(row, 'id')!, userId: text(row, 'user_id')!, amount: numeric(row, 'amount'), transferContent: text(row, 'transfer_content')!, status: text(row, 'status') as Topup['status'], providerReference: text(row, 'provider_reference'), createdAt: text(row, 'created_at')! });
 const publicUser = (user: User) => { const { passwordHash: _passwordHash, email: _email, ...safe } = user; return safe; };
 const transferContent = () => 'NAP' + Array.from({ length: 6 }, () => randomInt(0, 10)).join('') + 'U' + randomInt(0, 10);
@@ -58,6 +72,27 @@ async function seedDatabase() {
   if (!await first('SELECT id FROM users WHERE id = ?', ['demo-user'])) await execute('INSERT INTO users (id, username, email, phone, password_hash, role, balance, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', ['demo-user', 'Demo User', 'demo@example.com', '0995438093', await argon2.hash('demo123456'), 'USER', 245000, 'ACTIVE', now]);
   const products = [['chung-suc-1', 'Chung sức 1 rương', '1 rương SS, nhập mã sự kiện.', 30000, 25000, 1, 99], ['chung-suc-2', 'Chung sức 2 rương', '2 rương SS + S+, nhập mã sự kiện.', 45000, 35000, 1, 99], ['chung-suc-full', 'Chung sức full 3 rương', 'Full 3 rương Chung Sức.', 60000, 50000, 1, 99], ['acc-clone', 'Acc clone level 12', 'Acc clone bao full khi còn hàng.', 1000, 800, 1, 12]];
   for (const product of products) await execute('INSERT OR IGNORE INTO products (id, name, description, price, reseller_price, available, stock, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', [...product, now] as SqlArg[]);
+
+  const defaultVouchers = [
+    ['vch_1', 'BINAOV10', 'Giảm 10% cho mọi đơn hàng từ 30.000 Xu', 'PERCENT', 10, 30000, 20000, 100, 0, null, 1, now],
+    ['vch_2', 'CHUNGSUC5K', 'Giảm ngay 5.000 Xu cho đơn từ 45.000 Xu', 'FIXED', 5000, 45000, null, 200, 0, null, 1, now],
+    ['vch_3', 'VIP20', 'Giảm 20% tối đa 30.000 Xu cho đơn từ 60.000 Xu', 'PERCENT', 20, 60000, 30000, 50, 0, null, 1, now]
+  ];
+  for (const v of defaultVouchers) {
+    await execute('INSERT OR IGNORE INTO vouchers (id, code, description, discount_type, discount_value, min_order_value, max_discount, usage_limit, used_count, expires_at, active, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', v as SqlArg[]);
+  }
+
+  // Seed topup samples if leaderboard is empty
+  const paidCount = await first('SELECT COUNT(*) AS c FROM topup_transactions WHERE status = ?', ['PAID']);
+  if (!numeric(paidCount!, 'c')) {
+    const demoTops = [
+      ['demo_top_1', 'demo-user', 500000, 'NAP500001U1', 'PAID', 'REF500001', now, now],
+      ['demo_top_2', 'demo-user', 250000, 'NAP250002U2', 'PAID', 'REF250002', now, now]
+    ];
+    for (const t of demoTops) {
+      await execute('INSERT OR IGNORE INTO topup_transactions (id, user_id, amount, transfer_content, status, provider_reference, created_at, paid_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', t as SqlArg[]);
+    }
+  }
 }
 await ensureDatabase();
 await seedDatabase();
@@ -77,6 +112,61 @@ const orderSelect = 'SELECT o.*, u.username, p.name AS product_name FROM orders 
 
 app.get('/health', async () => ({ ok: true, service: 'binaov-be' }));
 app.get('/api/products', async () => ({ data: (await query('SELECT * FROM products WHERE available = 1 ORDER BY created_at DESC')).map(asProduct) }));
+
+app.get('/api/leaderboard', async () => {
+  const rows = await query<{ user_id: string; username: string; total_deposited: number; topup_count: number }>(`
+    SELECT u.id AS user_id, u.username,
+           COALESCE(SUM(t.amount), 0) AS total_deposited,
+           COUNT(t.id) AS topup_count
+    FROM users u
+    JOIN topup_transactions t ON t.user_id = u.id AND t.status = 'PAID'
+    WHERE u.role = 'USER'
+    GROUP BY u.id, u.username
+    ORDER BY total_deposited DESC
+    LIMIT 20
+  `);
+  const leaderboard: LeaderboardEntry[] = rows.map((r, index) => ({
+    rank: index + 1,
+    userId: r.user_id,
+    username: r.username,
+    totalDeposited: numeric(r, 'total_deposited'),
+    topupCount: numeric(r, 'topup_count')
+  }));
+  return { data: leaderboard };
+});
+
+app.get('/api/vouchers', async () => {
+  const now = new Date().toISOString();
+  const vouchers = (await query('SELECT * FROM vouchers WHERE active = 1 AND (expires_at IS NULL OR expires_at > ?) ORDER BY created_at DESC', [now])).map(asVoucher);
+  return { data: vouchers };
+});
+
+app.post('/api/vouchers/validate', async (request, reply) => {
+  const body = z.object({ code: z.string().trim().min(1), orderAmount: z.number().int().min(0) }).parse(request.body);
+  const row = await first('SELECT * FROM vouchers WHERE lower(code) = lower(?) AND active = 1', [body.code]);
+  if (!row) throw reply.notFound('Mã voucher không tồn tại hoặc đã bị vô hiệu');
+  const voucher = asVoucher(row);
+  if (voucher.expiresAt && new Date(voucher.expiresAt) < new Date()) {
+    throw reply.badRequest('Mã voucher này đã hết hạn sử dụng');
+  }
+  if (voucher.usageLimit != null && voucher.usedCount >= voucher.usageLimit) {
+    throw reply.badRequest('Mã voucher này đã hết lượt sử dụng');
+  }
+  if (body.orderAmount < voucher.minOrderValue) {
+    throw reply.badRequest(`Đơn hàng phải từ ${new Intl.NumberFormat('vi-VN').format(voucher.minOrderValue)} Xu để dùng mã này`);
+  }
+  let discount = 0;
+  if (voucher.discountType === 'PERCENT') {
+    discount = Math.round((body.orderAmount * voucher.discountValue) / 100);
+    if (voucher.maxDiscount != null && discount > voucher.maxDiscount) {
+      discount = voucher.maxDiscount;
+    }
+  } else {
+    discount = voucher.discountValue;
+  }
+  discount = Math.min(discount, body.orderAmount);
+  return { data: { voucher, discount, finalAmount: body.orderAmount - discount } };
+});
 app.post('/api/auth/register', async (request, reply) => {
   const body = z.object({ username: z.string().trim().min(2).max(40), password: z.string().min(6) }).parse(request.body);
   if (await first('SELECT id FROM users WHERE lower(username) = lower(?)', [body.username])) throw reply.conflict('Tên đăng nhập đã được sử dụng');
@@ -108,19 +198,76 @@ app.post('/api/topups', { onRequest: [app.authenticate] }, async (request, reply
 });
 app.post('/api/orders', { onRequest: [app.authenticate] }, async (request, reply) => {
   const user = await currentUser(request, reply);
-  const body = z.object({ productId: z.string(), uid: z.string().trim().min(3).max(80), quantity: z.number().int().min(1).max(99), note: z.string().max(500).optional() }).parse(request.body);
+  const body = z.object({
+    productId: z.string(),
+    uid: z.string().trim().min(3).max(80),
+    quantity: z.number().int().min(1).max(99),
+    voucherCode: z.string().trim().optional(),
+    note: z.string().max(500).optional()
+  }).parse(request.body);
   const productRow = await first('SELECT * FROM products WHERE id = ? AND available = 1', [body.productId]);
   if (!productRow) throw reply.notFound('Sản phẩm không tồn tại hoặc đã tắt');
   const product = asProduct(productRow);
-  const total = product.price * body.quantity;
+  const originalTotal = product.price * body.quantity;
+  let discount = 0;
+  let appliedVoucher: Voucher | null = null;
+
+  if (body.voucherCode) {
+    const vRow = await first('SELECT * FROM vouchers WHERE lower(code) = lower(?) AND active = 1', [body.voucherCode]);
+    if (vRow) {
+      const v = asVoucher(vRow);
+      const isExpired = v.expiresAt && new Date(v.expiresAt) < new Date();
+      const isExhausted = v.usageLimit != null && v.usedCount >= v.usageLimit;
+      if (!isExpired && !isExhausted && originalTotal >= v.minOrderValue) {
+        appliedVoucher = v;
+        if (v.discountType === 'PERCENT') {
+          discount = Math.round((originalTotal * v.discountValue) / 100);
+          if (v.maxDiscount != null && discount > v.maxDiscount) discount = v.maxDiscount;
+        } else {
+          discount = v.discountValue;
+        }
+        discount = Math.min(discount, originalTotal);
+      }
+    }
+  }
+
+  const total = Math.max(0, originalTotal - discount);
   const debit = await execute('UPDATE users SET balance = balance - ? WHERE id = ? AND balance >= ?', [total, user.id, total]);
   if (!debit.rowsAffected) throw reply.badRequest('Số dư không đủ để tạo đơn');
   const now = new Date().toISOString();
-  const order: Order = { id: createId('ord'), userId: user.id, username: user.username, productId: product.id, productName: product.name, uid: body.uid, quantity: body.quantity, total, status: 'PENDING', note: body.note, createdAt: now };
+  const fullNote = appliedVoucher
+    ? `[Voucher ${appliedVoucher.code} - Giảm ${discount} Xu] ${body.note ?? ''}`.trim()
+    : body.note;
+  const order: Order = {
+    id: createId('ord'),
+    userId: user.id,
+    username: user.username,
+    productId: product.id,
+    productName: product.name,
+    uid: body.uid,
+    quantity: body.quantity,
+    total,
+    originalTotal,
+    discount,
+    voucherCode: appliedVoucher?.code,
+    status: 'PENDING',
+    note: fullNote,
+    createdAt: now
+  };
   try {
-    await execute('INSERT INTO orders (id, user_id, product_id, uid, quantity, total, status, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [order.id, order.userId, order.productId, order.uid, order.quantity, order.total, order.status, order.note ?? null, now, now]);
+    try {
+      await execute('INSERT INTO orders (id, user_id, product_id, uid, quantity, total, status, note, created_at, updated_at, voucher_code, discount, original_total) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [order.id, order.userId, order.productId, order.uid, order.quantity, order.total, order.status, order.note ?? null, now, now, order.voucherCode ?? null, order.discount ?? 0, order.originalTotal ?? total]);
+    } catch {
+      await execute('INSERT INTO orders (id, user_id, product_id, uid, quantity, total, status, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [order.id, order.userId, order.productId, order.uid, order.quantity, order.total, order.status, order.note ?? null, now, now]);
+    }
     await execute('INSERT INTO wallet_ledger (id, user_id, type, amount, reference_id, created_at) VALUES (?, ?, ?, ?, ?, ?)', [createId('led'), user.id, 'ORDER_DEBIT', -total, order.id, now]);
-  } catch (error) { await execute('UPDATE users SET balance = balance + ? WHERE id = ?', [total, user.id]); throw error; }
+    if (appliedVoucher) {
+      await execute('UPDATE vouchers SET used_count = used_count + 1 WHERE id = ?', [appliedVoucher.id]);
+    }
+  } catch (error) {
+    await execute('UPDATE users SET balance = balance + ? WHERE id = ?', [total, user.id]);
+    throw error;
+  }
   return reply.code(201).send({ data: order });
 });
 app.get('/api/orders', { onRequest: [app.authenticate] }, async (request, reply) => {
@@ -194,6 +341,89 @@ app.delete('/api/admin/products/:id', { onRequest: [app.authenticate] }, async (
   await admin(request, reply);
   const id = (request.params as { id: string }).id;
   if (!(await execute('DELETE FROM products WHERE id = ?', [id])).rowsAffected) throw reply.notFound('Product not found');
+  return { data: { deleted: true } };
+});
+
+app.get('/api/admin/vouchers', { onRequest: [app.authenticate] }, async (request, reply) => {
+  await admin(request, reply);
+  const vouchers = (await query('SELECT * FROM vouchers ORDER BY created_at DESC')).map(asVoucher);
+  return { data: vouchers };
+});
+
+app.post('/api/admin/vouchers', { onRequest: [app.authenticate] }, async (request, reply) => {
+  await admin(request, reply);
+  const body = z.object({
+    code: z.string().trim().min(2).max(30).transform((s) => s.toUpperCase()),
+    description: z.string().trim().min(2).max(250),
+    discountType: z.enum(['PERCENT', 'FIXED']),
+    discountValue: z.number().int().min(1),
+    minOrderValue: z.number().int().min(0).default(0),
+    maxDiscount: z.number().int().min(1).optional(),
+    usageLimit: z.number().int().min(1).optional(),
+    expiresAt: z.string().optional().nullable(),
+    active: z.boolean().default(true)
+  }).parse(request.body);
+
+  if (await first('SELECT id FROM vouchers WHERE upper(code) = ?', [body.code])) {
+    throw reply.conflict('Mã voucher này đã tồn tại');
+  }
+
+  const id = createId('vch');
+  const now = new Date().toISOString();
+  await execute(`
+    INSERT INTO vouchers (id, code, description, discount_type, discount_value, min_order_value, max_discount, usage_limit, used_count, expires_at, active, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+  `, [id, body.code, body.description, body.discountType, body.discountValue, body.minOrderValue, body.maxDiscount ?? null, body.usageLimit ?? null, body.expiresAt ?? null, body.active ? 1 : 0, now]);
+
+  return reply.code(201).send({ data: asVoucher((await first('SELECT * FROM vouchers WHERE id = ?', [id]))!) });
+});
+
+app.patch('/api/admin/vouchers/:id', { onRequest: [app.authenticate] }, async (request, reply) => {
+  await admin(request, reply);
+  const id = (request.params as { id: string }).id;
+  const body = z.object({
+    code: z.string().trim().min(2).max(30).transform((s) => s.toUpperCase()).optional(),
+    description: z.string().trim().min(2).max(250).optional(),
+    discountType: z.enum(['PERCENT', 'FIXED']).optional(),
+    discountValue: z.number().int().min(1).optional(),
+    minOrderValue: z.number().int().min(0).optional(),
+    maxDiscount: z.number().int().min(1).nullable().optional(),
+    usageLimit: z.number().int().min(1).nullable().optional(),
+    expiresAt: z.string().nullable().optional(),
+    active: z.boolean().optional()
+  }).parse(request.body);
+
+  const existing = await first('SELECT * FROM vouchers WHERE id = ?', [id]);
+  if (!existing) throw reply.notFound('Voucher không tồn tại');
+
+  if (body.code) {
+    const dup = await first('SELECT id FROM vouchers WHERE upper(code) = ? AND id != ?', [body.code, id]);
+    if (dup) throw reply.conflict('Mã voucher này đã trùng với voucher khác');
+  }
+
+  const columns: string[] = [];
+  const args: SqlArg[] = [];
+  if (body.code !== undefined) { columns.push('code = ?'); args.push(body.code); }
+  if (body.description !== undefined) { columns.push('description = ?'); args.push(body.description); }
+  if (body.discountType !== undefined) { columns.push('discount_type = ?'); args.push(body.discountType); }
+  if (body.discountValue !== undefined) { columns.push('discount_value = ?'); args.push(body.discountValue); }
+  if (body.minOrderValue !== undefined) { columns.push('min_order_value = ?'); args.push(body.minOrderValue); }
+  if (body.maxDiscount !== undefined) { columns.push('max_discount = ?'); args.push(body.maxDiscount ?? null); }
+  if (body.usageLimit !== undefined) { columns.push('usage_limit = ?'); args.push(body.usageLimit ?? null); }
+  if (body.expiresAt !== undefined) { columns.push('expires_at = ?'); args.push(body.expiresAt ?? null); }
+  if (body.active !== undefined) { columns.push('active = ?'); args.push(body.active ? 1 : 0); }
+
+  if (columns.length) {
+    await execute('UPDATE vouchers SET ' + columns.join(', ') + ' WHERE id = ?', [...args, id]);
+  }
+
+  return { data: asVoucher((await first('SELECT * FROM vouchers WHERE id = ?', [id]))!) };
+});
+
+app.delete('/api/admin/vouchers/:id', { onRequest: [app.authenticate] }, async (request, reply) => {
+  await admin(request, reply);
+  const id = (request.params as { id: string }).id;
+  if (!(await execute('DELETE FROM vouchers WHERE id = ?', [id])).rowsAffected) throw reply.notFound('Voucher không tồn tại');
   return { data: { deleted: true } };
 });
 

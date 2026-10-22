@@ -67,10 +67,26 @@ export async function ensureDatabase() {
       created_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS vouchers (
+      id TEXT PRIMARY KEY,
+      code TEXT NOT NULL UNIQUE,
+      description TEXT NOT NULL,
+      discount_type TEXT NOT NULL,
+      discount_value INTEGER NOT NULL,
+      min_order_value INTEGER NOT NULL DEFAULT 0,
+      max_discount INTEGER,
+      usage_limit INTEGER,
+      used_count INTEGER NOT NULL DEFAULT 0,
+      expires_at TEXT,
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id);
     CREATE INDEX IF NOT EXISTS idx_orders_created_at ON orders(created_at);
     CREATE INDEX IF NOT EXISTS idx_topups_user_id ON topup_transactions(user_id);
     CREATE INDEX IF NOT EXISTS idx_topups_status ON topup_transactions(status);
+    CREATE INDEX IF NOT EXISTS idx_vouchers_code ON vouchers(code);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_wallet_ledger_reference ON wallet_ledger(user_id, type, reference_id);
   `);
 }
