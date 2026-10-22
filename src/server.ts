@@ -71,6 +71,7 @@ const asVoucher = (row: DbRow): Voucher => ({
 });
 const asOrder = (row: DbRow): Order => ({ id: text(row, 'id')!, userId: text(row, 'user_id')!, username: text(row, 'username') ?? '', productId: text(row, 'product_id')!, productName: text(row, 'product_name') ?? '', uid: text(row, 'uid')!, quantity: numeric(row, 'quantity'), total: numeric(row, 'total'), originalTotal: row.original_total == null ? undefined : numeric(row, 'original_total'), discount: row.discount == null ? undefined : numeric(row, 'discount'), voucherCode: text(row, 'voucher_code'), status: text(row, 'status') as OrderStatus, note: text(row, 'note'), createdAt: text(row, 'created_at')! });
 const asTopup = (row: DbRow): Topup => ({ id: text(row, 'id')!, userId: text(row, 'user_id')!, amount: numeric(row, 'amount'), transferContent: text(row, 'transfer_content')!, status: text(row, 'status') as Topup['status'], providerReference: text(row, 'provider_reference'), createdAt: text(row, 'created_at')! });
+const asLedger = (row: DbRow) => ({ id: text(row, 'id')!, userId: text(row, 'user_id')!, type: text(row, 'type')!, amount: numeric(row, 'amount'), referenceId: text(row, 'reference_id')!, createdAt: text(row, 'created_at')! });
 const publicUser = (user: User) => { const { passwordHash: _passwordHash, email: _email, ...safe } = user; return safe; };
 const transferContent = () => 'NAP' + Array.from({ length: 6 }, () => randomInt(0, 10)).join('') + 'U' + randomInt(0, 10);
 const qrUrl = (amount: number, content: string) => {
@@ -228,6 +229,11 @@ app.get('/api/user-types', async () => {
   return { data: types };
 });
 app.get('/api/wallet/balance', { onRequest: [app.authenticate] }, async (request, reply) => ({ data: { balance: (await currentUser(request, reply)).balance } }));
+app.get('/api/wallet/ledger', { onRequest: [app.authenticate] }, async (request, reply) => {
+  const user = await currentUser(request, reply);
+  const rows = await query('SELECT * FROM wallet_ledger WHERE user_id = ? ORDER BY created_at DESC LIMIT 50', [user.id]);
+  return { data: rows.map(asLedger) };
+});
 app.get('/api/topups', { onRequest: [app.authenticate] }, async (request, reply) => {
   const user = await currentUser(request, reply);
   return { data: (await query('SELECT * FROM topup_transactions WHERE user_id = ? ORDER BY created_at DESC', [user.id])).map(asTopup) };
@@ -484,6 +490,100 @@ app.patch('/api/admin/users/:id/type', { onRequest: [app.authenticate] }, async 
   const role = body.userType === 'ADMIN' ? 'ADMIN' : 'USER';
   await execute('UPDATE users SET user_type = ?, role = ? WHERE id = ?', [body.userType, role, id]);
   return { data: publicUser(asUser((await first('SELECT * FROM users WHERE id = ?', [id]))!)) };
+});
+
+const handleAdjustBalance = async (request: any, reply: any) => {
+  const adminUser = await admin(request, reply);
+  const id = (request.params as { id: string }).id;
+  const body = z.object({
+    action: z.enum(['ADD', 'SUBTRACT']).optional(),
+    type: z.enum(['ADD', 'SUBTRACT']).optional(),
+    amount: z.number().int(),
+    reason: z.string().trim().max(255).optional()
+  }).parse(request.body);
+
+  const action = (body.action || body.type || (body.amount >= 0 ? 'ADD' : 'SUBTRACT')).toUpperCase() as 'ADD' | 'SUBTRACT';
+  const absAmount = Math.abs(body.amount);
+  if (absAmount <= 0) {
+    throw reply.badRequest('Số Xu cần điều chỉnh phải lớn hơn 0');
+  }
+
+  const existing = await first('SELECT * FROM users WHERE id = ?', [id]);
+  if (!existing) throw reply.notFound('Không tìm thấy người dùng');
+
+  const currentBalance = numeric(existing, 'balance');
+  if (action === 'SUBTRACT' && currentBalance < absAmount) {
+    throw reply.badRequest(`Số dư hiện tại (${new Intl.NumberFormat('vi-VN').format(currentBalance)} Xu) không đủ để trừ ${new Intl.NumberFormat('vi-VN').format(absAmount)} Xu`);
+  }
+
+  const delta = action === 'ADD' ? absAmount : -absAmount;
+  const newBalance = currentBalance + delta;
+  const now = new Date().toISOString();
+
+  await execute('UPDATE users SET balance = balance + ? WHERE id = ?', [delta, id]);
+
+  const ledgerType = action === 'ADD' ? 'ADMIN_CREDIT' : 'ADMIN_DEBIT';
+  const refId = createId('adj');
+  await execute(
+    'INSERT INTO wallet_ledger (id, user_id, type, amount, reference_id, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+    [createId('led'), id, ledgerType, delta, refId, now]
+  );
+
+  try {
+    await execute(`
+      INSERT INTO admin_audit_logs (id, admin_id, action, entity_type, entity_id, payload, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `, [
+      createId('log'),
+      adminUser.id,
+      action === 'ADD' ? 'BALANCE_ADD' : 'BALANCE_SUBTRACT',
+      'USER',
+      id,
+      JSON.stringify({
+        amount: absAmount,
+        delta,
+        reason: body.reason ?? '',
+        oldBalance: currentBalance,
+        newBalance,
+        adminUsername: adminUser.username
+      }),
+      now
+    ]);
+  } catch (_) {}
+
+  const updatedRow = await first(`
+    SELECT u.*, ut.name as user_type_name, ut.discount_percent
+    FROM users u
+    LEFT JOIN user_types ut ON ut.code = u.user_type
+    WHERE u.id = ?
+  `, [id]);
+  const u = asUser(updatedRow!);
+
+  return {
+    data: {
+      ...publicUser(u),
+      userType: u.userType,
+      userTypeName: text(updatedRow, 'user_type_name') || (u.role === 'ADMIN' ? 'Quản trị viên' : 'Thành viên'),
+      discountPercent: numeric(updatedRow, 'discount_percent'),
+      previousBalance: currentBalance,
+      delta,
+      action,
+      balance: u.balance
+    },
+    message: action === 'ADD'
+      ? `Đã cộng thành công ${new Intl.NumberFormat('vi-VN').format(absAmount)} Xu cho ${u.username}`
+      : `Đã trừ thành công ${new Intl.NumberFormat('vi-VN').format(absAmount)} Xu của ${u.username}`
+  };
+};
+
+app.post('/api/admin/users/:id/balance', { onRequest: [app.authenticate] }, handleAdjustBalance);
+app.post('/api/admin/users/:id/adjust-balance', { onRequest: [app.authenticate] }, handleAdjustBalance);
+
+app.get('/api/admin/users/:id/ledger', { onRequest: [app.authenticate] }, async (request, reply) => {
+  await admin(request, reply);
+  const id = (request.params as { id: string }).id;
+  const rows = await query('SELECT * FROM wallet_ledger WHERE user_id = ? ORDER BY created_at DESC LIMIT 50', [id]);
+  return { data: rows.map(asLedger) };
 });
 app.get('/api/admin/topups', { onRequest: [app.authenticate] }, async (request, reply) => { await admin(request, reply); return { data: (await query('SELECT * FROM topup_transactions ORDER BY created_at DESC')).map(asTopup) }; });
 app.post('/api/admin/products', { onRequest: [app.authenticate] }, async (request, reply) => {
