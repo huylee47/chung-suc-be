@@ -7,7 +7,7 @@ import sensible from '@fastify/sensible';
 import { z } from 'zod';
 import { randomInt, randomUUID } from 'node:crypto';
 import { ensureDatabase, turso } from './db.js';
-import type { DiscountType, LeaderboardEntry, Order, OrderStatus, Product, Topup, User, Voucher } from './types.js';
+import type { DiscountType, LeaderboardEntry, Order, OrderStatus, Product, Topup, User, UserType, Voucher } from './types.js';
 
 declare module 'fastify' { interface FastifyInstance { authenticate: (request: any) => Promise<void>; } }
 type DbRow = Record<string, unknown>;
@@ -32,7 +32,28 @@ const createId = (prefix: string) => prefix + '_' + randomUUID().slice(0, 12);
 const text = (row: DbRow, key: string) => row[key] == null ? undefined : String(row[key]);
 const numeric = (row: DbRow, key: string) => Number(row[key] ?? 0);
 
-const asUser = (row: DbRow): User => ({ id: text(row, 'id')!, username: text(row, 'username')!, email: text(row, 'email')!, phone: text(row, 'phone'), passwordHash: text(row, 'password_hash'), role: text(row, 'role') === 'ADMIN' ? 'ADMIN' : 'USER', balance: numeric(row, 'balance'), status: text(row, 'status') === 'LOCKED' ? 'LOCKED' : 'ACTIVE', createdAt: text(row, 'created_at')! });
+const asUser = (row: DbRow): User => ({
+  id: text(row, 'id')!,
+  username: text(row, 'username')!,
+  email: text(row, 'email')!,
+  phone: text(row, 'phone'),
+  passwordHash: text(row, 'password_hash'),
+  role: text(row, 'role') === 'ADMIN' ? 'ADMIN' : 'USER',
+  userType: text(row, 'user_type') || (text(row, 'role') === 'ADMIN' ? 'ADMIN' : 'MEMBER'),
+  balance: numeric(row, 'balance'),
+  status: text(row, 'status') === 'LOCKED' ? 'LOCKED' : 'ACTIVE',
+  createdAt: text(row, 'created_at')!
+});
+const asUserType = (row: DbRow): UserType => ({
+  id: text(row, 'id')!,
+  code: text(row, 'code')!,
+  name: text(row, 'name')!,
+  discountPercent: numeric(row, 'discount_percent'),
+  description: text(row, 'description'),
+  color: text(row, 'color'),
+  userCount: row.user_count == null ? undefined : numeric(row, 'user_count'),
+  createdAt: text(row, 'created_at')!
+});
 const asProduct = (row: DbRow): Product => ({ id: text(row, 'id')!, name: text(row, 'name')!, description: text(row, 'description')!, price: numeric(row, 'price'), resellerPrice: row.reseller_price == null ? undefined : numeric(row, 'reseller_price'), available: numeric(row, 'available') === 1, stock: row.stock == null ? undefined : numeric(row, 'stock') });
 const asVoucher = (row: DbRow): Voucher => ({
   id: text(row, 'id')!,
@@ -87,6 +108,16 @@ async function seedDatabase() {
   ];
   for (const v of defaultVouchers) {
     await execute('INSERT OR IGNORE INTO vouchers (id, code, description, discount_type, discount_value, min_order_value, max_discount, usage_limit, used_count, expires_at, active, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', v as SqlArg[]);
+  }
+
+  const defaultUserTypes = [
+    ['ut_member', 'MEMBER', 'Thành viên', 0, 'Thành viên thông thường mặc định', '#64748b', now],
+    ['ut_ctv', 'CTV', 'Cộng tác viên (CTV)', 10, 'Cộng tác viên giảm giá 10% cho mọi dịch vụ', '#0284c7', now],
+    ['ut_vip', 'VIP', 'Khách VIP', 5, 'Khách hàng VIP thân thiết giảm giá 5%', '#f59e0b', now],
+    ['ut_admin', 'ADMIN', 'Quản trị viên', 0, 'Quản trị viên quản lý toàn bộ hệ thống', '#7c3aed', now]
+  ];
+  for (const ut of defaultUserTypes) {
+    await execute('INSERT OR IGNORE INTO user_types (id, code, name, discount_percent, description, color, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', ut as SqlArg[]);
   }
 }
 await ensureDatabase();
@@ -166,8 +197,8 @@ app.post('/api/auth/register', async (request, reply) => {
   const body = z.object({ username: z.string().trim().min(2).max(40), password: z.string().min(6) }).parse(request.body);
   if (await first('SELECT id FROM users WHERE lower(username) = lower(?)', [body.username])) throw reply.conflict('Tên đăng nhập đã được sử dụng');
   const id = createId('usr');
-  const user: User = { id, username: body.username, email: id + '@users.binaov.shop', passwordHash: await argon2.hash(body.password), role: 'USER', balance: 0, status: 'ACTIVE', createdAt: new Date().toISOString() };
-  await execute('INSERT INTO users (id, username, email, phone, password_hash, role, balance, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', [user.id, user.username, user.email, user.phone ?? null, user.passwordHash!, user.role, 0, user.status, user.createdAt]);
+  const user: User = { id, username: body.username, email: id + '@users.binaov.shop', passwordHash: await argon2.hash(body.password), role: 'USER', userType: 'MEMBER', balance: 0, status: 'ACTIVE', createdAt: new Date().toISOString() };
+  await execute('INSERT INTO users (id, username, email, phone, password_hash, role, user_type, balance, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [user.id, user.username, user.email, user.phone ?? null, user.passwordHash!, user.role, user.userType ?? 'MEMBER', 0, user.status, user.createdAt]);
   return reply.code(201).send({ data: { user: publicUser(user), token: app.jwt.sign({ sub: user.id, role: user.role }) } });
 });
 app.post('/api/auth/login', async (request, reply) => {
@@ -178,7 +209,24 @@ app.post('/api/auth/login', async (request, reply) => {
   if (!user || user.status === 'LOCKED' || !user.passwordHash || !(await argon2.verify(user.passwordHash, body.password))) throw reply.unauthorized('Thông tin đăng nhập không hợp lệ');
   return { data: { user: publicUser(user), token: app.jwt.sign({ sub: user.id, role: user.role }) } };
 });
-app.get('/api/me', { onRequest: [app.authenticate] }, async (request, reply) => ({ data: publicUser(await currentUser(request, reply)) }));
+app.get('/api/me', { onRequest: [app.authenticate] }, async (request, reply) => {
+  const user = await currentUser(request, reply);
+  const typeRow = user.userType ? await first('SELECT * FROM user_types WHERE code = ?', [user.userType]) : null;
+  const userTypeInfo = typeRow ? asUserType(typeRow) : null;
+  return {
+    data: {
+      ...publicUser(user),
+      userType: user.userType || (user.role === 'ADMIN' ? 'ADMIN' : 'MEMBER'),
+      userTypeName: userTypeInfo?.name || (user.role === 'ADMIN' ? 'Quản trị viên' : 'Thành viên'),
+      discountPercent: userTypeInfo?.discountPercent ?? 0
+    }
+  };
+});
+
+app.get('/api/user-types', async () => {
+  const types = (await query('SELECT * FROM user_types ORDER BY discount_percent ASC, created_at ASC')).map(asUserType);
+  return { data: types };
+});
 app.get('/api/wallet/balance', { onRequest: [app.authenticate] }, async (request, reply) => ({ data: { balance: (await currentUser(request, reply)).balance } }));
 app.get('/api/topups', { onRequest: [app.authenticate] }, async (request, reply) => {
   const user = await currentUser(request, reply);
@@ -204,7 +252,15 @@ app.post('/api/orders', { onRequest: [app.authenticate] }, async (request, reply
   if (!productRow) throw reply.notFound('Sản phẩm không tồn tại hoặc đã tắt');
   const product = asProduct(productRow);
   const originalTotal = product.price * body.quantity;
-  let discount = 0;
+
+  // 1. Chiết khấu loại người dùng (CTV, VIP...)
+  const typeRow = user.userType ? await first('SELECT * FROM user_types WHERE code = ?', [user.userType]) : null;
+  const userTypeDiscountPercent = typeRow ? numeric(typeRow, 'discount_percent') : 0;
+  const userTypeDiscount = userTypeDiscountPercent > 0 ? Math.round((originalTotal * userTypeDiscountPercent) / 100) : 0;
+  const amountAfterTier = Math.max(0, originalTotal - userTypeDiscount);
+
+  // 2. Chiết khấu voucher
+  let voucherDiscount = 0;
   let appliedVoucher: Voucher | null = null;
 
   if (body.voucherCode) {
@@ -216,23 +272,28 @@ app.post('/api/orders', { onRequest: [app.authenticate] }, async (request, reply
       if (!isExpired && !isExhausted && originalTotal >= v.minOrderValue) {
         appliedVoucher = v;
         if (v.discountType === 'PERCENT') {
-          discount = Math.round((originalTotal * v.discountValue) / 100);
-          if (v.maxDiscount != null && discount > v.maxDiscount) discount = v.maxDiscount;
+          voucherDiscount = Math.round((originalTotal * v.discountValue) / 100);
+          if (v.maxDiscount != null && voucherDiscount > v.maxDiscount) voucherDiscount = v.maxDiscount;
         } else {
-          discount = v.discountValue;
+          voucherDiscount = v.discountValue;
         }
-        discount = Math.min(discount, originalTotal);
+        voucherDiscount = Math.min(voucherDiscount, amountAfterTier);
       }
     }
   }
 
-  const total = Math.max(0, originalTotal - discount);
+  const totalDiscount = userTypeDiscount + voucherDiscount;
+  const total = Math.max(0, originalTotal - totalDiscount);
   const debit = await execute('UPDATE users SET balance = balance - ? WHERE id = ? AND balance >= ?', [total, user.id, total]);
   if (!debit.rowsAffected) throw reply.badRequest('Số dư không đủ để tạo đơn');
   const now = new Date().toISOString();
-  const fullNote = appliedVoucher
-    ? `[Voucher ${appliedVoucher.code} - Giảm ${discount} Xu] ${body.note ?? ''}`.trim()
-    : body.note;
+
+  const noteParts: string[] = [];
+  if (userTypeDiscount > 0) noteParts.push(`[${typeRow ? text(typeRow, 'name') : 'Ưu đãi CTV'} -${userTypeDiscount} Xu]`);
+  if (appliedVoucher) noteParts.push(`[Voucher ${appliedVoucher.code} -${voucherDiscount} Xu]`);
+  if (body.note) noteParts.push(body.note);
+  const fullNote = noteParts.join(' ').trim() || undefined;
+
   const order: Order = {
     id: createId('ord'),
     userId: user.id,
@@ -243,7 +304,7 @@ app.post('/api/orders', { onRequest: [app.authenticate] }, async (request, reply
     quantity: body.quantity,
     total,
     originalTotal,
-    discount,
+    discount: totalDiscount,
     voucherCode: appliedVoucher?.code,
     status: 'PENDING',
     note: fullNote,
@@ -311,7 +372,119 @@ app.patch('/api/admin/orders/:id/status', { onRequest: [app.authenticate] }, asy
   if (!(await execute('UPDATE orders SET status = ?, updated_at = ? WHERE id = ?', [body.status, new Date().toISOString(), id])).rowsAffected) throw reply.notFound('Order not found');
   return { data: asOrder((await first(orderSelect + ' WHERE o.id = ?', [id]))!) };
 });
-app.get('/api/admin/users', { onRequest: [app.authenticate] }, async (request, reply) => { await admin(request, reply); return { data: (await query('SELECT * FROM users WHERE role = ? ORDER BY created_at DESC', ['USER'])).map(asUser).map(publicUser) }; });
+app.get('/api/admin/users', { onRequest: [app.authenticate] }, async (request, reply) => {
+  await admin(request, reply);
+  const rows = await query(`
+    SELECT u.*, ut.name as user_type_name, ut.discount_percent
+    FROM users u
+    LEFT JOIN user_types ut ON ut.code = u.user_type
+    ORDER BY u.created_at DESC
+  `);
+  return {
+    data: rows.map((r) => {
+      const u = asUser(r);
+      return {
+        ...publicUser(u),
+        userType: u.userType,
+        userTypeName: text(r, 'user_type_name') || (u.role === 'ADMIN' ? 'Quản trị viên' : 'Thành viên'),
+        discountPercent: numeric(r, 'discount_percent')
+      };
+    })
+  };
+});
+
+app.get('/api/admin/user-types', { onRequest: [app.authenticate] }, async (request, reply) => {
+  await admin(request, reply);
+  const rows = await query(`
+    SELECT ut.*, COUNT(u.id) as user_count
+    FROM user_types ut
+    LEFT JOIN users u ON u.user_type = ut.code
+    GROUP BY ut.id
+    ORDER BY ut.discount_percent ASC, ut.created_at ASC
+  `);
+  return { data: rows.map(asUserType) };
+});
+
+app.post('/api/admin/user-types', { onRequest: [app.authenticate] }, async (request, reply) => {
+  await admin(request, reply);
+  const body = z.object({
+    code: z.string().trim().min(2).max(20).transform((s) => s.toUpperCase()),
+    name: z.string().trim().min(2).max(50),
+    discountPercent: z.number().int().min(0).max(100),
+    description: z.string().trim().max(255).optional(),
+    color: z.string().trim().max(20).optional()
+  }).parse(request.body);
+
+  if (await first('SELECT id FROM user_types WHERE upper(code) = ?', [body.code])) {
+    throw reply.conflict('Mã loại người dùng đã tồn tại');
+  }
+
+  const id = createId('ut');
+  const now = new Date().toISOString();
+  const desc: SqlArg = body.description ?? null;
+  const col: SqlArg = body.color ?? '#0284c7';
+  await execute(`
+    INSERT INTO user_types (id, code, name, discount_percent, description, color, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `, [id, body.code, body.name, body.discountPercent, desc, col, now]);
+
+  return reply.code(201).send({ data: asUserType((await first('SELECT * FROM user_types WHERE id = ?', [id]))!) });
+});
+
+app.patch('/api/admin/user-types/:id', { onRequest: [app.authenticate] }, async (request, reply) => {
+  await admin(request, reply);
+  const id = (request.params as { id: string }).id;
+  const body = z.object({
+    name: z.string().trim().min(2).max(50).optional(),
+    discountPercent: z.number().int().min(0).max(100).optional(),
+    description: z.string().trim().max(255).optional(),
+    color: z.string().trim().max(20).optional()
+  }).parse(request.body);
+
+  const existing = await first('SELECT * FROM user_types WHERE id = ?', [id]);
+  if (!existing) throw reply.notFound('Không tìm thấy loại người dùng');
+
+  const columns: string[] = [];
+  const args: SqlArg[] = [];
+  if (body.name !== undefined) { columns.push('name = ?'); args.push(body.name); }
+  if (body.discountPercent !== undefined) { columns.push('discount_percent = ?'); args.push(body.discountPercent); }
+  if (body.description !== undefined) { columns.push('description = ?'); args.push(body.description); }
+  if (body.color !== undefined) { columns.push('color = ?'); args.push(body.color); }
+
+  if (columns.length) {
+    await execute('UPDATE user_types SET ' + columns.join(', ') + ' WHERE id = ?', [...args, id]);
+  }
+
+  return { data: asUserType((await first('SELECT * FROM user_types WHERE id = ?', [id]))!) };
+});
+
+app.delete('/api/admin/user-types/:id', { onRequest: [app.authenticate] }, async (request, reply) => {
+  await admin(request, reply);
+  const id = (request.params as { id: string }).id;
+  const existing = await first('SELECT * FROM user_types WHERE id = ?', [id]);
+  if (!existing) throw reply.notFound('Không tìm thấy loại người dùng');
+  const code = text(existing, 'code');
+  if (!code || code === 'MEMBER' || code === 'ADMIN') {
+    throw reply.badRequest('Không thể xóa loại người dùng mặc định');
+  }
+
+  await execute('UPDATE users SET user_type = "MEMBER" WHERE user_type = ?', [code]);
+  await execute('DELETE FROM user_types WHERE id = ?', [id]);
+  return { data: { deleted: true } };
+});
+
+app.patch('/api/admin/users/:id/type', { onRequest: [app.authenticate] }, async (request, reply) => {
+  await admin(request, reply);
+  const id = (request.params as { id: string }).id;
+  const body = z.object({ userType: z.string().trim().toUpperCase() }).parse(request.body);
+
+  const existing = await first('SELECT * FROM users WHERE id = ?', [id]);
+  if (!existing) throw reply.notFound('Không tìm thấy người dùng');
+
+  const role = body.userType === 'ADMIN' ? 'ADMIN' : 'USER';
+  await execute('UPDATE users SET user_type = ?, role = ? WHERE id = ?', [body.userType, role, id]);
+  return { data: publicUser(asUser((await first('SELECT * FROM users WHERE id = ?', [id]))!)) };
+});
 app.get('/api/admin/topups', { onRequest: [app.authenticate] }, async (request, reply) => { await admin(request, reply); return { data: (await query('SELECT * FROM topup_transactions ORDER BY created_at DESC')).map(asTopup) }; });
 app.post('/api/admin/products', { onRequest: [app.authenticate] }, async (request, reply) => {
   await admin(request, reply);

@@ -82,11 +82,26 @@ export async function ensureDatabase() {
       created_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS user_types (
+      id TEXT PRIMARY KEY,
+      code TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
+      discount_percent INTEGER NOT NULL DEFAULT 0,
+      description TEXT,
+      color TEXT,
+      created_at TEXT NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id);
     CREATE INDEX IF NOT EXISTS idx_orders_created_at ON orders(created_at);
     CREATE INDEX IF NOT EXISTS idx_topups_user_id ON topup_transactions(user_id);
     CREATE INDEX IF NOT EXISTS idx_topups_status ON topup_transactions(status);
     CREATE INDEX IF NOT EXISTS idx_vouchers_code ON vouchers(code);
+    CREATE INDEX IF NOT EXISTS idx_user_types_code ON user_types(code);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_wallet_ledger_reference ON wallet_ledger(user_id, type, reference_id);
   `);
+
+  try {
+    await turso.execute('ALTER TABLE users ADD COLUMN user_type TEXT DEFAULT "MEMBER"');
+  } catch (_) {}
 }

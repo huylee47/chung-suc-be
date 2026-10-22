@@ -69,6 +69,16 @@ CREATE TABLE IF NOT EXISTS vouchers (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS user_types (
+  id TEXT PRIMARY KEY,
+  code TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL,
+  discount_percent INTEGER NOT NULL DEFAULT 0,
+  description TEXT,
+  color TEXT,
+  created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS order_status_history (
   id TEXT PRIMARY KEY,
   order_id TEXT NOT NULL REFERENCES orders(id),

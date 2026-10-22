@@ -8,10 +8,22 @@ export interface User {
   email: string;
   phone?: string;
   role: Role;
+  userType?: string;
   balance: number;
   status: 'ACTIVE' | 'LOCKED';
   createdAt: string;
   passwordHash?: string;
+}
+
+export interface UserType {
+  id: string;
+  code: string;
+  name: string;
+  discountPercent: number;
+  description?: string;
+  color?: string;
+  userCount?: number;
+  createdAt: string;
 }
 
 export interface Product {
